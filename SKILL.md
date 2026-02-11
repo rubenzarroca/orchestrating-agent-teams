@@ -1,9 +1,11 @@
 ---
 name: orchestrating-agent-teams
 description: >
-  Orchestrate Claude Code Agent Teams (multi-agent swarms). Use when spawning teammates,
-  designing team structures, coordinating parallel agents, or debugging team issues.
-allowed-tools: Read, Grep, Glob, Bash, Task
+  Orchestrate Claude Code Agent Teams (multi-agent swarms). Use when: (1) spawning
+  or coordinating multiple Claude teammates, (2) designing team structures for parallel
+  or perspective work, (3) the user asks for a "team", "swarm", or "multi-agent"
+  approach, (4) debugging stuck teammates, file conflicts, or team coordination issues,
+  (5) evaluating whether a task needs a team vs. subagents vs. single agent.
 ---
 
 # Agent Teams Orchestration
@@ -148,40 +150,21 @@ their cost.
 
 ## Coordination Primitives
 
-Teammates share two coordination mechanisms. Think of them as the team's Jira and
-Slack — one tracks state, the other enables conversation.
-
-**Shared Task List** — the source of truth for who is doing what. Every teammate
-can see the full list, pick up pending tasks, and mark their own work as completed.
-The Lead uses it to monitor progress without interrupting anyone. It is the only
-reliable way to know if a teammate has finished — don't assume completion from
-silence. Known limitation: teammates sometimes finish work but forget to update
-the list, so the Lead should check periodically and nudge if needed.
-
-**Mailbox (Direct Messages & Broadcast)** — teammates can send messages to a
-specific teammate (DM) or to the entire team (broadcast). This is how agents
-share evidence, challenge each other's findings, ask for clarification, or flag
-dependencies. Unlike the task list (which tracks state), the mailbox carries
-intent — "I found something that affects your hypothesis" or "I need the API
-contract before I can proceed."
-
-How much you use each primitive depends on the paradigm:
+Teammates share a **Task List** (state tracking) and a **Mailbox** (DM/broadcast
+messaging). How much you use each depends on the paradigm:
 
 | Primitive | Throughput teams | Perspective teams |
 |-----------|-----------------|-------------------|
 | Task List | Heavy — clear ownership, track progress per module | Moderate — track completion, but work is less divisible |
-| Mailbox | Minimal — agents work in isolation, DM only for blockers | Heavy — cross-communication is where the value emerges |
+| Mailbox | Minimal — DM only for blockers | Heavy — cross-communication is where the value emerges |
 
-In Throughput teams, keep agents isolated. The task list does the heavy lifting:
-each agent owns their slice, works independently, and marks done. Mailbox use
-should be rare — only for genuine blockers or interface questions.
+Known limitation: teammates sometimes finish work but forget to mark tasks complete.
+The Lead should check periodically and nudge.
 
-In Perspective teams, actively encourage mailbox use. The breakthrough insight
-often comes from Agent A messaging Agent B with a finding that reframes B's
-analysis. Include explicit instructions like "message other investigators when
-you find evidence that supports or refutes their hypothesis" in the spawn prompt.
-Without this, agents default to working in silos and you lose the cross-pollination
-that justifies the team in the first place.
+In Perspective teams, explicitly encourage mailbox use in the spawn prompt (e.g.,
+"message other investigators when you find evidence that supports or refutes their
+hypothesis"). Without this, agents default to silos and you lose the cross-pollination
+that justifies the team.
 
 ## Team Patterns
 
@@ -210,12 +193,12 @@ The power comes from wall-clock time savings — keep agents isolated and focuse
 Read `references/prompt-templates.md` for ready-to-use prompts for each pattern.
 
 **Perspective examples:**
-See `examples/multi-lens-review-session.md` for a 3-agent code review walkthrough.
-See `examples/competing-hypotheses-business.md` for a 5-agent business investigation.
+See `references/examples/multi-lens-review-session.md` for a 3-agent code review walkthrough.
+See `references/examples/competing-hypotheses-business.md` for a 5-agent business investigation.
 
 **Throughput examples:**
-See `examples/parallel-modules-feature-build.md` for a 3-agent feature build.
-See `examples/research-and-implement.md` for a 2-agent research→build workflow.
+See `references/examples/parallel-modules-feature-build.md` for a 3-agent feature build.
+See `references/examples/research-and-implement.md` for a 2-agent research→build workflow.
 
 ## Governance
 
@@ -260,37 +243,6 @@ into what each teammate will do before they do it. Delegate mode ensures the
 Lead stays focused on that oversight instead of getting pulled into implementation.
 Together they create a governance loop: plan → approve → execute → report →
 synthesize — similar to sprint planning → review in agile.
-
-## The Human's Role During Execution
-
-The Lead manages the team. The human manages the Lead. Understanding this
-hierarchy is key to not wasting time micromanaging agents or, worse, going
-hands-off while the team burns tokens in the wrong direction.
-
-**Monitor, don't direct.** The split-pane view (tmux/iTerm2) is your dashboard.
-Use it to scan for anomalies: a teammate that hasn't produced output in a while,
-the Lead writing code instead of coordinating, a task list that isn't updating.
-If everything is flowing, don't touch anything. The urge to intervene when things
-are "just a bit slow" is almost always counterproductive — let the team work.
-
-**Intervene on red flags, not on style.** A teammate editing files outside their
-scope, the Lead abandoning delegate mode, two teammates duplicating effort, or
-token cost visibly spiraling — these are reasons to interrupt. A teammate taking
-a slightly different approach than you'd have chosen is not. If the output will
-be correct, the path doesn't matter.
-
-**Talk to the Lead, not to the teammates.** The Lead is your single point of
-contact with the team. If you want to redirect a teammate, tell the Lead. If you
-want to add scope, tell the Lead. If you start bypassing the Lead and messaging
-teammates directly, you break the coordination layer — the Lead loses track of
-what's happening and can't synthesize properly.
-
-**Know when to abort.** If multiple teammates are stuck, if the Lead is confused
-about the objective, or if you realize the approach is fundamentally wrong — kill
-the team, go back to plan mode, and start fresh. The tokens you've spent are sunk
-cost. Continuing a broken team to "not waste what we've spent" will always cost
-more than restarting with clarity. The signal to abort is not "things are slow"
-but "things are going in the wrong direction."
 
 ## Operating Rules
 
