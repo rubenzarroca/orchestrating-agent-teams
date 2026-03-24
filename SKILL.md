@@ -3,9 +3,12 @@ name: orchestrating-agent-teams
 description: >
   Orchestrate Claude Code Agent Teams (multi-agent swarms). Use when: (1) spawning
   or coordinating multiple Claude teammates, (2) designing team structures for parallel
-  or perspective work, (3) the user asks for a "team", "swarm", or "multi-agent"
-  approach, (4) debugging stuck teammates, file conflicts, or team coordination issues,
-  (5) evaluating whether a task needs a team vs. subagents vs. single agent.
+  or perspective work, (3) the user asks for a "team", "swarm", "multi-agent", or
+  "parallel agents" approach, (4) debugging stuck teammates, file conflicts, idle states,
+  or team coordination issues, (5) evaluating whether a task needs a team vs. subagents
+  vs. single agent, (6) the user wants to "divide the work", do a "multi-perspective
+  review", or "parallelize" a task across agents. Even if the user doesn't say "team"
+  explicitly, use this skill whenever the intent is clearly multi-agent coordination.
 ---
 
 # Agent Teams Orchestration
@@ -21,9 +24,11 @@ value. Read the Gatekeeper Rule before spawning anything.
 
 ## Prerequisites
 
-1. Enable: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in settings.json or shell
-2. Install tmux or iTerm2 for split-pane monitoring (required for 3+ teammates)
-3. Claude Code >= v2026.2.x
+1. Claude Code CLI installed (v2.x+)
+2. The following tools must be available: `TeamCreate`, `TeamDelete`, `Agent`,
+   `SendMessage`, `TaskCreate`, `TaskUpdate`, `TaskList`
+3. If Agent Teams are behind a feature flag in your version, enable with
+   `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in settings.json or shell
 
 ## Before You Spawn: The Gatekeeper Rule
 
@@ -77,6 +82,52 @@ structure, prompts, and synthesis — is fundamentally different.
 
 Read `references/decision-framework.md` for the full decision matrix and cost estimation.
 
+## Team Lifecycle — The Real Workflow
+
+Agent Teams follow a formal lifecycle using specific tools. Understanding this
+sequence is essential — skipping steps leads to orphaned teams or lost coordination.
+
+```
+1. TeamCreate        → Creates team + shared task list
+2. TaskCreate        → Define tasks in the shared list
+3. Agent             → Spawn teammates (with team_name + name params)
+4. TaskUpdate        → Teammates claim and complete tasks
+5. SendMessage       → Communicate (DM, broadcast, shutdown requests)
+6. SendMessage       → shutdown_request to each teammate when done
+7. TeamDelete        → Clean up team + task directories
+```
+
+**Creating the team:**
+```
+TeamCreate(team_name: "my-feature", description: "Build notification preferences")
+```
+This creates `~/.claude/teams/my-feature/` and `~/.claude/tasks/my-feature/`.
+
+**Spawning a teammate:**
+```
+Agent(
+  description: "API layer implementation",
+  prompt: "...",           # The full brief (see Briefing Protocol)
+  team_name: "my-feature", # Joins this team
+  name: "api-dev",         # Addressable name for messaging
+  model: "sonnet",         # Optional: sonnet for workers, opus for lead
+  mode: "plan"             # Optional: requires plan approval before edits
+)
+```
+
+**Shutting down teammates** (formal protocol — teammates can accept or reject):
+```
+SendMessage(
+  to: "api-dev",
+  message: { type: "shutdown_request", reason: "All tasks complete" }
+)
+```
+
+**Cleaning up:**
+```
+TeamDelete()  # Fails if teammates are still active — shut them down first
+```
+
 ## Briefing Protocol
 
 The spawn prompt is the single most important factor in a team's success or failure.
@@ -128,43 +179,114 @@ into subtasks or breaking it across two teammates.
 This is the #1 source of team failures. Agent Teams have no file-level locking. If
 two teammates edit the same file, one will overwrite the other's changes silently.
 
-Always assign exclusive file/directory ownership in the spawn prompt. Make it explicit
-and non-negotiable: "You own src/api/. No other teammate will touch these files. Do
-not edit files outside your scope." The Lead should verify there is zero overlap in
-file ownership across all teammates before spawning.
+**Primary solution:** Always assign exclusive file/directory ownership in the spawn
+prompt. Make it explicit and non-negotiable: "You own src/api/. No other teammate
+will touch these files. Do not edit files outside your scope." The Lead should verify
+there is zero overlap in file ownership across all teammates before spawning.
 
-### Supervision and Guidance
+**Alternative — worktree isolation:** For cases where file overlap is hard to avoid,
+spawn the teammate with `isolation: "worktree"`. This creates a temporary git worktree
+so the agent works on an isolated copy of the repo. If the agent makes changes, the
+worktree path and branch are returned in the result for manual merge. This eliminates
+race conditions at the cost of requiring a merge step afterward.
+
+### Agent Types for Teammates
+
+The Agent tool supports different `subagent_type` values, each with different tool access:
+
+- **general-purpose** (default): Full tool access including edit/write/bash. Use for
+  implementation work.
+- **Explore**: Read-only. Can search and read files but cannot edit. Use for research
+  or investigation tasks.
+- **Plan**: Read-only. Designs implementation plans. Use for architecture/planning tasks.
+
+Match the agent type to the task. A review teammate doesn't need write access — use
+Explore. An implementer needs full access — use general-purpose. This prevents
+accidental scope creep (a reviewer accidentally "fixing" what they found).
+
+### Supervision and Governance
 
 Not every teammate needs the same level of oversight. Calibrate based on risk:
 
-**Low risk (read-only tasks)**: Reviews, investigations, research. Let the teammate
-run independently. Check output when they mark complete.
+**Low risk (read-only tasks)**: Reviews, investigations, research. Spawn with
+`subagent_type: "Explore"`. Let the teammate run independently.
 
 **Medium risk (new code in isolated scope)**: Tests, docs, new modules with clear
-contracts. Use plan approval for the approach, then let them execute.
+contracts. Spawn with `mode: "plan"` to require plan approval. The teammate will
+present a plan and wait for your explicit `plan_approval_response` via SendMessage
+before making any edits. This is a formal API mechanism, not just a prompt instruction.
 
-**High risk (changes to existing production code)**: Require plan approval. Review
-the plan carefully. Consider requiring the teammate to explain their changes before
-marking complete. This is where the governance mechanisms from the next section earn
-their cost.
+**High risk (changes to existing production code)**: Use `mode: "plan"` AND
+`isolation: "worktree"`. Review the plan, approve, and then review the worktree
+changes before merging.
 
-## Coordination Primitives
+**Plan Approval flow:**
+1. Spawn teammate with `mode: "plan"`
+2. Teammate works in plan mode — can read but not edit
+3. Teammate calls ExitPlanMode → system sends you a `plan_approval_request`
+4. You review and respond via SendMessage:
+   ```
+   SendMessage(to: "teammate-name", message: {
+     type: "plan_approval_response",
+     request_id: "...",    # from the request
+     approve: true         # or false with feedback
+   })
+   ```
+5. On approval, teammate exits plan mode and can implement
 
-Teammates share a **Task List** (state tracking) and a **Mailbox** (DM/broadcast
-messaging). How much you use each depends on the paradigm:
+**Lead as coordinator, not implementer.** The Lead should coordinate, assign tasks,
+monitor progress, and synthesize results — not write code itself. This is a prompt
+convention, not a system enforcement: include "Do not write any code yourself. Only
+coordinate, assign tasks, and synthesize results from teammates." in the initial
+team setup. Without this, the Lead tends to "help" by implementing, and the team
+loses its coordinator.
 
-| Primitive | Throughput teams | Perspective teams |
-|-----------|-----------------|-------------------|
-| Task List | Heavy — clear ownership, track progress per module | Moderate — track completion, but work is less divisible |
-| Mailbox | Minimal — DM only for blockers | Heavy — cross-communication is where the value emerges |
+## Communication: SendMessage
 
-Known limitation: teammates sometimes finish work but forget to mark tasks complete.
-The Lead should check periodically and nudge.
+Teammates communicate via the `SendMessage` tool. There are two modes:
 
-In Perspective teams, explicitly encourage mailbox use in the spawn prompt (e.g.,
+**Direct message** — send to a specific teammate by name:
+```
+SendMessage(to: "researcher", message: "Check if the auth module uses JWT or sessions", summary: "Ask about auth approach")
+```
+
+**Broadcast** — send to all teammates at once:
+```
+SendMessage(to: "*", message: "Critical blocker found — stop all work", summary: "Critical blocker")
+```
+
+**Broadcast is expensive** — it sends a separate message to every teammate. Use it
+only for critical announcements that genuinely affect everyone. Default to direct
+messages for normal coordination.
+
+How much communication you encourage depends on the paradigm:
+
+| Mode | Throughput teams | Perspective teams |
+|------|-----------------|-------------------|
+| DM | Minimal — only for blockers | Heavy — cross-communication is where the value emerges |
+| Broadcast | Rarely needed | Only for critical shared findings |
+
+In Perspective teams, explicitly encourage DM use in the spawn prompt (e.g.,
 "message other investigators when you find evidence that supports or refutes their
 hypothesis"). Without this, agents default to silos and you lose the cross-pollination
 that justifies the team.
+
+Teammates discover each other by reading `~/.claude/teams/{team-name}/config.json`,
+which lists all members with their names.
+
+## Understanding Idle State
+
+**Teammates go idle after every turn. This is normal, not an error.** When a
+teammate's turn ends (they sent a message, completed a task, or are waiting for
+input), the system marks them idle and sends a notification to the Lead.
+
+Key points:
+- Idle means "waiting for input," not "stuck" or "done"
+- A teammate sending a message and then going idle is the normal flow
+- Sending a message to an idle teammate wakes them up immediately
+- Do not treat idle notifications as errors or try to "fix" them
+- Only be concerned about idleness if a teammate has been idle for an extended
+  period AND has unfinished tasks assigned to them
 
 ## Team Patterns
 
@@ -200,79 +322,37 @@ See `references/examples/competing-hypotheses-business.md` for a 5-agent busines
 See `references/examples/parallel-modules-feature-build.md` for a 3-agent feature build.
 See `references/examples/research-and-implement.md` for a 2-agent research→build workflow.
 
-## Governance
-
-Agent teams without governance are expensive chaos. These two mechanisms are
-non-negotiable controls — the equivalent of code review and role separation
-in an agile team.
-
-**Plan Approval — the merge request before work starts.** For complex or risky
-tasks, require the teammate to present a detailed plan of what they intend to do
-before writing any code. The Lead (or the human) reviews and approves the plan.
-Only after approval does the teammate execute. This is a merge request for AIs:
-you review the intent before the implementation exists, catching misunderstandings
-and scope creep early when they're cheap to fix. Use plan approval when the
-teammate's task involves production code changes, architectural decisions, or any
-work that would be costly to redo. For read-only tasks (reviews, investigations),
-plan approval is optional — the risk of wrong execution is low.
-
-To enforce plan approval, include in the spawn prompt:
-```
-Before writing any code, present a detailed plan of your approach:
-what files you'll modify, what changes you'll make, and why.
-Wait for explicit approval before proceeding with implementation.
-```
-
-**Delegate Mode — the Lead coordinates, never implements.** Activate with
-Shift+Tab. This restricts the Lead to coordination only: assigning tasks,
-monitoring progress, synthesizing results, and facilitating communication.
-The Lead cannot write code. This prevents the most common failure mode: the
-Lead gets "helpful," starts implementing instead of orchestrating, and the
-team loses its coordinator. The role of the manager is to facilitate, not to
-do the team's work. A Lead that codes is a Lead that isn't watching the task
-list, isn't catching stuck teammates, and isn't synthesizing findings.
-
-Always include in the initial team prompt:
-```
-Activate delegate mode. Do not write any code yourself.
-Only coordinate, assign tasks, and synthesize results from teammates.
-```
-
-These two mechanisms work together. Plan approval gives the Lead visibility
-into what each teammate will do before they do it. Delegate mode ensures the
-Lead stays focused on that oversight instead of getting pulled into implementation.
-Together they create a governance loop: plan → approve → execute → report →
-synthesize — similar to sprint planning → review in agile.
-
 ## Operating Rules
-
-**Monitoring:**
-- Split-pane view (tmux/iTerm2) shows all teammate activity simultaneously
-- Monitor task list: teammates sometimes forget to mark tasks completed
-- Always instruct: "Wait for all teammates to complete before synthesizing"
-
-**Navigation:**
-- Shift+Up/Down to switch between teammate sessions
-- Enter to view, Escape to interrupt
 
 **Cost control:**
 - Plan first in plan mode (cheap), then hand plan to team (expensive)
-- Use Sonnet for teammates, Opus for Lead
-- Kill idle teammates immediately after completion
+- Use Sonnet for teammates (`model: "sonnet"`), Opus for Lead
+- Shut down teammates via `shutdown_request` immediately after completion
 - Start with 2-3 teammates; add more only if parallelism genuinely helps
-- Each teammate = full Claude instance; 5 teammates ≈ 7-10x token cost
+- Each teammate = full Claude instance; 5 teammates ~ 7-10x token cost
+- Use `run_in_background: true` on Agent when you have independent work to do
+  while a teammate runs — avoids blocking the Lead
+
+**Monitoring:**
+- Messages from teammates are delivered automatically — no need to poll
+- Monitor task list: teammates sometimes forget to mark tasks completed
+- Always instruct: "Wait for all teammates to complete before synthesizing"
+- Idle notifications are informational — don't react unless a teammate is stuck
 
 ## Anti-Patterns (Quick Check)
 
 Before spawning, scan this list. If any apply, stop and fix first.
 
-1. Same-file editing across teammates → assign exclusive ownership (see Briefing > File Ownership)
+1. Same-file editing across teammates → assign exclusive ownership or use `isolation: "worktree"`
 2. Vague briefs → answer the 5 questions (see Briefing Protocol)
 3. More than 5 teammates → reduce; coordination overhead exceeds gains
 4. Sequential dependencies disguised as parallel work → use subagents or single agent
 5. Spawning before planning → plan in plan mode first (see Gatekeeper Rule)
+6. Forgetting TeamCreate → always create the team before spawning teammates
+7. Forgetting shutdown → always send `shutdown_request` before `TeamDelete`
 
 ## Troubleshooting
 
-Read `references/troubleshooting.md` when teammates appear stuck, the Lead starts
-coding instead of coordinating, or task states fall out of sync.
+Read `references/troubleshooting.md` when teammates appear stuck, idle state is
+confusing, the Lead starts coding instead of coordinating, or task states fall
+out of sync.

@@ -26,7 +26,9 @@ Regardless of paradigm, these rules apply before spawning:
 
 ```
 Do workers edit the same files?
-├── YES → Single Agent (no file locking in Agent Teams)
+├── YES → Can you use worktree isolation?
+│   ├── YES → Agent Team with isolation: "worktree" (merge step required)
+│   └── NO → Single Agent (no file locking in Agent Teams)
 └── NO → Safe to proceed with team or subagents
 ```
 
@@ -37,18 +39,19 @@ coordination models, like the difference between a manager delegating tasks and
 a team of peers collaborating.
 
 **Subagents are vertical — delegation with a boss.** The parent agent spawns
-workers, each receives a brief, executes independently, and reports back. Workers
-never see each other. The parent collects all reports and synthesizes. Think of it
-as a manager sending three people to do three separate errands — they don't need
-to talk to each other, the manager just collects the results. Cost: 1.5-2x.
-Session resumption works normally.
+workers via `Agent(prompt: "...")`, each receives a brief, executes independently,
+and reports back. Workers never see each other. The parent collects all reports
+and synthesizes. Think of it as a manager sending three people to do three
+separate errands — they don't need to talk to each other, the manager just
+collects the results. Cost: 1.5-2x. No team setup needed.
 
 **Agent Teams are horizontal — peers with a coordinator.** Teammates are fully
-independent Claude instances with their own context windows. They share a task
-list and a mailbox. They can message each other directly, challenge each other's
+independent Claude instances with their own context windows, spawned via
+`Agent(team_name: "...", name: "...")`. They share a task list and can message
+each other via `SendMessage`. They can DM, broadcast, challenge each other's
 findings, and self-organize. The Lead coordinates but doesn't micromanage. Think
 of it as a war room where specialists work the same problem from different angles
-and talk to each other. Cost: 3-10x. Session resumption is broken (experimental).
+and talk to each other. Cost: 3-10x. Requires TeamCreate/TeamDelete lifecycle.
 
 The key question is: **do the workers need to interact with each other?**
 
@@ -64,14 +67,16 @@ in token cost.
 
 ## Comparison Matrix
 
-| Dimension          | Single Agent    | Subagents            | Agent Team                  |
-|--------------------|-----------------|----------------------|-----------------------------|
-| Context            | One window      | Report to parent     | Fully independent windows   |
-| Communication      | N/A             | Up only (→ parent)   | Any direction (broadcast/DM)|
-| Coordination       | Manual          | Parent micromanages  | Self-managed via task list  |
-| File safety        | No conflicts    | No conflicts         | Race condition risk         |
-| Token cost         | 1x              | 1.5-2x               | 3-10x                      |
-| Session resumption | Full            | Full                 | Broken (experimental)       |
+| Dimension          | Single Agent    | Subagents            | Agent Team                     |
+|--------------------|-----------------|----------------------|--------------------------------|
+| Setup              | None            | None                 | TeamCreate + TeamDelete        |
+| Context            | One window      | Report to parent     | Fully independent windows      |
+| Communication      | N/A             | Up only (→ parent)   | SendMessage (DM / broadcast)   |
+| Coordination       | Manual          | Parent collects      | Shared task list + messaging   |
+| File safety        | No conflicts    | No conflicts         | Race risk (use worktree to mitigate) |
+| Token cost         | 1x              | 1.5-2x               | 3-10x                         |
+| Governance         | N/A             | N/A                  | Plan approval (`mode: "plan"`) |
+| Isolation option   | N/A             | Worktree available   | Worktree available             |
 
 ## When Perspective Teams Excel
 
@@ -114,7 +119,7 @@ too long, but each piece is straightforward," you need a Throughput team.
 | 5         | 7-10x           | Competing hypotheses (Perspective)      |
 | 5+        | 10x+            | Rarely justified                        |
 
-Multiplier includes coordination overhead (task list, mailbox, Lead synthesis).
+Multiplier includes coordination overhead (task list, messaging, Lead synthesis).
 Perspective teams tend toward the higher end because cross-communication is essential.
 
 ## Pre-Team Checklist
@@ -123,10 +128,12 @@ Before spawning, verify:
 
 - [ ] Paradigm identified: Throughput or Perspective (or hybrid)
 - [ ] Work divides into independent tracks with zero file overlap
+       (or worktree isolation planned for unavoidable overlap)
 - [ ] Each track has a self-contained brief (scope + context + output format)
 - [ ] For Perspective: each agent has a distinct, named lens
 - [ ] For Perspective: cross-communication is explicitly enabled in the brief
 - [ ] Plan is solid (done in plan mode first)
 - [ ] Expected value justifies the token cost
-- [ ] tmux/iTerm2 ready for monitoring
+- [ ] Agent types chosen (general-purpose for implementers, Explore for reviewers)
 - [ ] Model allocation decided (Opus Lead, Sonnet teammates)
+- [ ] Governance level set (mode: "plan" for medium/high risk tasks)

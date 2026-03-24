@@ -9,38 +9,62 @@ Common failure modes and recovery procedures.
 **Symptoms**: The Lead writes implementation code directly instead of assigning to teammates.
 
 **Cause**: Without explicit instruction, the Lead defaults to "helpful assistant" mode and tries
-to solve problems itself rather than coordinating.
+to solve problems itself rather than coordinating. There is no system-level enforcement of a
+"delegate-only" mode — it's a prompt convention.
 
 **Fix**: Interrupt the Lead and send:
 ```
 Stop. You are the coordinator, not an implementer.
-Activate delegate mode (Shift+Tab). Assign this work to a teammate.
-Do not write any code yourself for the rest of this session.
+Do not write any code yourself. Assign this work to a teammate.
 ```
 
-**Prevention**: Always include "Activate delegate mode" in the initial team prompt.
+**Prevention**: Always include in the initial team setup prompt:
+"Do not write any code yourself. Only coordinate, assign tasks, and synthesize results
+from teammates."
+
+---
+
+## Problem: Teammate Idle — Doesn't Mean Stuck
+
+**Symptoms**: The system sends idle notifications for a teammate. The Lead panics or
+tries to "fix" the idle state.
+
+**Cause**: Teammates go idle after every turn — this is completely normal. Idle means
+"waiting for input," not "broken" or "done." The system sends an idle notification
+automatically whenever a teammate's turn ends.
+
+**Not a problem if**: The teammate just sent a message or completed a task. They're
+simply waiting for a response or new work.
+
+**Actually a problem if**: The teammate has been idle for an extended period AND has
+unfinished tasks assigned AND hasn't sent any messages. In this case, send them a
+direct message to check status:
+```
+SendMessage(to: "teammate-name", message: "Status check: are you blocked on anything?")
+```
 
 ---
 
 ## Problem: Teammate Stuck — Task Not Marked Complete
 
-**Symptoms**: Task list shows "in progress" but the teammate has stopped producing output.
-The Lead is waiting and won't proceed.
+**Symptoms**: Task list shows "in progress" but the teammate has stopped producing output
+and is idle. The Lead is waiting and won't proceed.
 
 **Cause**: Teammates sometimes finish work but forget to update the shared task list.
-This is a known experimental limitation.
 
 **Fix**:
-1. Navigate to the teammate's session (Shift+Up/Down)
-2. Check if the work is actually done
-3. If done, tell the teammate: "Mark your current task as completed"
-4. If the teammate is unresponsive, tell the Lead: "Task X is complete. Proceed with synthesis."
+1. Send a message to the teammate:
+   ```
+   SendMessage(to: "teammate-name", message: "Your work looks complete. Please mark your task as completed via TaskUpdate.")
+   ```
+2. If the teammate is unresponsive after the message, the Lead can mark the task
+   complete directly via TaskUpdate and proceed with synthesis.
 
 ---
 
 ## Problem: File Conflicts Between Teammates
 
-**Symptoms**: One teammate's changes overwrite another's. Build breaks after merge.
+**Symptoms**: One teammate's changes overwrite another's. Build breaks after integration.
 
 **Cause**: Two teammates edited the same file. There is no file-level locking in Agent Teams.
 
@@ -49,9 +73,11 @@ This is a known experimental limitation.
 2. Have that teammate re-apply their changes
 3. Tell the other teammate to work in a different file
 
-**Prevention**: Always divide work by directory, never by function within the same file.
-In the team prompt, explicitly state: "Each teammate owns their directory exclusively.
-No cross-directory edits."
+**Prevention (two options)**:
+- **Directory ownership**: Divide work by directory, never by function within the same file.
+  In the spawn prompt: "You own src/api/ exclusively. No cross-directory edits."
+- **Worktree isolation**: Spawn with `isolation: "worktree"` for any teammate that might
+  touch overlapping files. Changes land on a separate branch for manual merge.
 
 ---
 
@@ -61,10 +87,10 @@ No cross-directory edits."
 
 **Cause**: Vague spawn briefs with unclear scope boundaries.
 
-**Fix**: Tell the Lead to reassign with narrower scope:
+**Fix**: Send messages to reassign with narrower scope:
 ```
-Teammate A: you own [specific files/dirs]. Do not touch anything outside this scope.
-Teammate B: you own [different files/dirs]. Do not touch anything outside this scope.
+SendMessage(to: "teammate-a", message: "Narrow your scope to [specific files/dirs] only.")
+SendMessage(to: "teammate-b", message: "Narrow your scope to [different files/dirs] only.")
 ```
 
 **Prevention**: Spawn briefs must include explicit file/directory ownership.
@@ -79,7 +105,7 @@ is incomplete or ignores findings from slower teammates.
 **Cause**: The Lead gets "impatient" — a known behavioral pattern where it proceeds
 before all inputs are ready.
 
-**Fix**: Interrupt and send:
+**Fix**: Send a message to the Lead (or remind yourself):
 ```
 Stop. Teammates [X, Y] have not completed their tasks yet.
 Wait for ALL teammates to mark their tasks as completed before synthesizing.
@@ -91,19 +117,30 @@ proceeding" as the last line of the team prompt.
 
 ---
 
-## Problem: Session Resume Fails
+## Problem: Shutdown Rejected
 
-**Symptoms**: After `/resume`, the Lead tries to message teammates that no longer exist.
+**Symptoms**: You send a `shutdown_request` but the teammate rejects it.
 
-**Cause**: `/resume` and `/rewind` do not restore in-process teammates. This is a
-known limitation of the experimental feature.
+**Cause**: Teammates can reject shutdown if they believe they still have work to do.
+The `shutdown_response` will include `approve: false` and a reason.
 
-**Fix**:
+**Fix**: Read the rejection reason. If the teammate genuinely has remaining work,
+let them finish. If they're confused, send a clarifying message:
 ```
-Your previous teammates no longer exist after session resume.
-Spawn new teammates to continue the remaining work.
-Here is the current state: [describe what was completed and what remains].
+SendMessage(to: "teammate-name", message: "All tasks are complete. Please accept the shutdown.")
 ```
+Then resend the shutdown request.
+
+---
+
+## Problem: TeamDelete Fails
+
+**Symptoms**: `TeamDelete()` returns an error about active members.
+
+**Cause**: You must shut down all teammates before deleting the team.
+
+**Fix**: Send `shutdown_request` to each active teammate, wait for acceptance,
+then call TeamDelete again.
 
 ---
 
@@ -112,10 +149,11 @@ Here is the current state: [describe what was completed and what remains].
 **Symptoms**: Session costs far exceed expectations. Teammates run much longer than planned.
 
 **Diagnosis checklist**:
-1. Are teammates idle but still alive? → Shut them down
+1. Are teammates idle but still alive? → Send `shutdown_request`
 2. Did you spawn more than 3 teammates? → Consider reducing
-3. Are teammates using Opus? → Switch to Sonnet for execution work
+3. Are teammates using Opus? → Switch to Sonnet (`model: "sonnet"`) for execution work
 4. Did you skip plan mode? → The plan is your cost checkpoint
+5. Are you broadcasting when DMs would suffice? → Each broadcast costs N messages
 
 **Cost rule of thumb**: If the total team work would take a single agent < 15 minutes,
 the coordination overhead makes teams more expensive than sequential work.
