@@ -32,46 +32,63 @@ Use plan mode. Break this into research and implementation tracks.
 
 Research goes first. Implementation starts only when research is marked complete.
 
-## Step 2: Team Spawn
+## Step 2: Team Setup and Spawn
 
+**Create the team and tasks:**
 ```
-Our Express API latency grew from 50ms to 400ms as data scaled. We need caching.
-Options on the table: Redis, in-memory (node-cache), HTTP caching (CDN + ETags).
+TeamCreate(team_name: "caching-layer", description: "Research and implement API caching strategy")
 
-Constraints:
-- App runs 3 instances behind a load balancer (sticky sessions off)
-- Data changes every ~15 minutes (batch import from external source)
-- Dashboard has 12 API endpoints, 4 are heavy (aggregation queries, 300ms+)
-- Memory budget per instance: 512MB
-- Team has no Redis operational experience
+TaskCreate(title: "Research caching options", description: "Evaluate Redis, node-cache, HTTP caching")
+TaskCreate(title: "Implement recommended caching", description: "Build chosen approach in src/cache/")
+```
 
-Create an agent team with 2 teammates:
+**Spawn researcher first** (Explore type — read-only research):
+```
+Agent(
+  description: "Research caching options",
+  team_name: "caching-layer",
+  name: "researcher",
+  model: "sonnet",
+  subagent_type: "Explore",
+  prompt: "Evaluate Redis, node-cache, and HTTP caching for our API.
+    Constraints:
+    - App runs 3 instances behind a load balancer (sticky sessions off)
+    - Data changes every ~15 minutes (batch import from external source)
+    - Dashboard has 12 API endpoints, 4 are heavy (aggregation queries, 300ms+)
+    - Memory budget per instance: 512MB
+    - Team has no Redis operational experience
+    Analyze the codebase: check src/api/ for endpoint patterns, src/db/ for query
+    patterns, and package.json for existing dependencies.
+    Document your analysis in docs/research/caching-strategy.md with:
+    - Pros/cons of each option against our specific constraints
+    - Clear recommendation with rationale
+    - Implementation outline (what files to create, what to modify)
+    - Cache invalidation strategy for the 15-minute refresh cycle
+    You own docs/research/ exclusively. Do not write implementation code.
+    Done when: recommendation document is complete with actionable implementation plan.
+    Mark your task as completed via TaskUpdate, then DM 'implementer' that research is ready."
+)
+```
 
-1. Researcher: Evaluate Redis, node-cache, and HTTP caching for our situation.
-   Analyze the codebase: check src/api/ for endpoint patterns, src/db/ for query
-   patterns, and package.json for existing dependencies. Consider our constraints
-   (multi-instance, 15-min freshness, 512MB memory, no Redis ops experience).
-   Document your analysis in docs/research/caching-strategy.md with:
-   - Pros/cons of each option against our specific constraints
-   - Clear recommendation with rationale
-   - Implementation outline (what files to create, what to modify)
-   - Cache invalidation strategy for the 15-minute refresh cycle
-   You own docs/research/ exclusively. Do not write implementation code.
-   Done when: recommendation document is complete with actionable implementation plan.
-
-2. Implementer: Wait for Researcher to complete and read their recommendation
-   at docs/research/caching-strategy.md. Then implement the recommended approach
-   in src/cache/. Integrate with the existing data access layer in src/db/.
-   If the recommendation is unclear, DM the Researcher for clarification.
-   You own src/cache/ exclusively. You may modify src/db/ files to add cache
-   integration but do not restructure existing query logic.
-   Done when: caching is integrated, the 4 heavy endpoints use the cache,
-   and cache invalidation is wired to the 15-minute import cycle.
-
-Researcher goes first. Implementer starts only after research is marked complete.
-Use Sonnet for both teammates.
-Activate delegate mode. Do not write any code yourself.
-Wait for all teammates to complete their tasks before proceeding.
+**Spawn implementer after researcher completes** (general-purpose with plan approval):
+```
+Agent(
+  description: "Implement caching layer",
+  team_name: "caching-layer",
+  name: "implementer",
+  model: "sonnet",
+  mode: "plan",
+  prompt: "Read the caching research at docs/research/caching-strategy.md and implement
+    the recommended approach in src/cache/. Integrate with the existing data access
+    layer in src/db/. If the recommendation is unclear, DM 'researcher' for clarification
+    via SendMessage.
+    You own src/cache/ exclusively. You may modify src/db/ files to add cache
+    integration but do not restructure existing query logic.
+    Present your implementation plan first and wait for approval.
+    Done when: caching is integrated, the 4 heavy endpoints use the cache,
+    and cache invalidation is wired to the 15-minute import cycle.
+    Mark your task as completed via TaskUpdate when done."
+)
 ```
 
 ## Step 3: Sequential Execution with Overlap
@@ -98,18 +115,20 @@ the 15-minute freshness perfectly, no new infrastructure, no memory cost. Add ET
 for conditional requests on the remaining 8 endpoints.
 
 - Documents recommendation in docs/research/caching-strategy.md
-- Marks task complete
+- Marks task complete via TaskUpdate
+- DMs implementer via SendMessage: "Research complete. Recommendation: HTTP caching."
 
 **Implementer** (starts after Researcher completes, working ~6 min):
 - Reads docs/research/caching-strategy.md
+- Presents plan → Lead approves via `plan_approval_response`
 - Creates src/cache/http-cache.ts — Express middleware that sets Cache-Control headers
 - Configures: heavy endpoints get `max-age=900`, light endpoints get `max-age=60` + ETag
 - Creates src/cache/etag.ts — ETag generator based on response content hash
 - Modifies src/api/router.ts to apply cache middleware to relevant routes
 - Tests with curl — verifies Cache-Control headers present, ETag conditional responses work
-- Marks task complete
+- Marks task complete via TaskUpdate
 
-## Step 4: Lead Synthesis
+## Step 4: Lead Synthesis and Shutdown
 
 ```markdown
 ## Caching Layer — Implementation Summary
@@ -140,21 +159,25 @@ complexity for our use case) and node-cache (multi-instance inconsistency).
 - Consider adding Vary headers if user-specific data is added later
 ```
 
+**Shutdown and cleanup:**
+```
+SendMessage(to: "researcher", message: { type: "shutdown_request", reason: "Implementation complete" })
+SendMessage(to: "implementer", message: { type: "shutdown_request", reason: "Implementation complete" })
+TeamDelete()
+```
+
 ## Why This Worked
 
-- **Controlled sequencing**: Unlike Parallel Modules, these tasks have a dependency
-  (Implementer needs Researcher's output). The team structure enforces the sequence
-  explicitly rather than hoping for the right order.
+- **Controlled sequencing**: The team structure enforces Research → Implement order
+  explicitly. The implementer waited for the researcher's TaskUpdate completion.
 - **Separation of concerns**: The Researcher explored options without implementation
-  bias. The Implementer focused on building without decision fatigue. Each role did
-  what it's best at.
+  bias. The Implementer focused on building without decision fatigue.
 - **DM as escape valve**: The Implementer could DM the Researcher for clarification
-  if needed, but didn't have to — the recommendation document was specific enough.
-  This is the minimal mailbox usage typical of Throughput teams.
+  via SendMessage if needed, but didn't have to — the recommendation was specific enough.
+- **Plan approval for implementation**: `mode: "plan"` ensured the Lead reviewed the
+  implementation approach before any code was written.
 - **Research prevented over-engineering**: A single agent might have jumped to Redis
   (the "obvious" choice) without evaluating whether simpler options fit the constraints.
-  The dedicated research phase forced a thorough evaluation that landed on the simplest
-  sufficient solution.
 - **Actionable handoff**: The research document included an implementation outline, not
-  just a recommendation. This is what makes the handoff work — the Implementer received
-  a buildable plan, not just a "go use HTTP caching" verdict.
+  just a recommendation — the Implementer received a buildable plan.
+- **Clean lifecycle**: TeamCreate → sequential work → shutdown_request → TeamDelete.

@@ -39,52 +39,78 @@ Tracks:
 All three tracks can run in parallel. No file overlap. Frontend mocks the API
 using the contract until integration.
 
-## Step 2: Team Spawn
+## Step 2: Team Setup and Spawn
+
+**Create the team and tasks:**
+```
+TeamCreate(team_name: "notif-prefs", description: "Build notification preferences feature")
+
+TaskCreate(title: "API endpoints for preferences", description: "3 endpoints in src/api/preferences/")
+TaskCreate(title: "Frontend preferences page", description: "Components in src/frontend/preferences/")
+TaskCreate(title: "Test suite for preferences", description: "Unit + integration in tests/preferences/")
+```
+
+**Spawn 3 implementers** (general-purpose with plan approval for medium-risk code):
 
 ```
-Build a notification preferences feature. Users toggle notification channels
-(email, in-app, SMS) per event type and set quiet hours.
+Agent(
+  description: "API layer implementation",
+  team_name: "notif-prefs",
+  name: "api-dev",
+  model: "sonnet",
+  mode: "plan",
+  prompt: "Implement the notification preferences API endpoints.
+    API contract:
+    - GET /api/preferences → { channels: { email, inApp, sms }, quietHours: { enabled, start, end }, eventTypes: [...] }
+    - PUT /api/preferences → accepts same shape, returns updated
+    - GET /api/preferences/events → returns available event types
+    Stack: Express API, Postgres. Use existing db pool in src/db/pool.ts.
+    Validate input (quiet hours must be valid HH:MM, channels must be boolean).
+    You own src/api/preferences/ and src/db/migrations/ exclusively.
+    Do not touch any other directory.
+    Present your implementation plan first and wait for approval.
+    Done when: all three endpoints work, migration is ready, input validation is in place.
+    Mark your task as completed via TaskUpdate when done."
+)
 
-API contract:
-- GET /api/preferences → { channels: { email, inApp, sms }, quietHours: { enabled, start, end }, eventTypes: [...] }
-- PUT /api/preferences → accepts same shape, returns updated
-- GET /api/preferences/events → returns available event types
+Agent(
+  description: "Frontend implementation",
+  team_name: "notif-prefs",
+  name: "frontend-dev",
+  model: "sonnet",
+  mode: "plan",
+  prompt: "Build the notification preferences page.
+    API contract (mock until integration):
+    - GET /api/preferences → { channels: { email, inApp, sms }, quietHours: { enabled, start, end }, eventTypes: [...] }
+    - PUT /api/preferences → accepts same shape, returns updated
+    Components: PreferencesPage (container), ChannelToggles (per event type),
+    QuietHoursForm (time picker with enable/disable). Use the existing design
+    system in src/frontend/components/ui/. Follow patterns in src/frontend/settings/.
+    You own src/frontend/preferences/ exclusively.
+    Do not touch any other directory.
+    Present your implementation plan first and wait for approval.
+    Done when: all components render with mock data, form validation works,
+    loading and error states handled.
+    Mark your task as completed via TaskUpdate when done."
+)
 
-Stack: Express API, Next.js frontend, Jest tests. Postgres for persistence.
-
-Spawn 3 teammates:
-
-1. API teammate: Implement the three endpoints in src/api/preferences/.
-   Create the Postgres migration for the preferences table. Use the existing
-   db connection pool in src/db/pool.ts. Validate input (quiet hours must be
-   valid HH:MM, channels must be boolean). Return proper HTTP status codes.
-   You own src/api/preferences/ and src/db/migrations/ exclusively.
-   Do not touch any other directory.
-   Done when: all three endpoints work, migration is ready, input validation
-   is in place.
-
-2. Frontend teammate: Build the preferences page in src/frontend/preferences/.
-   Components needed: PreferencesPage (container), ChannelToggles (per event type),
-   QuietHoursForm (time picker with enable/disable). Use the existing design
-   system in src/frontend/components/ui/. Mock API calls using the contract above
-   until integration. Follow existing patterns in src/frontend/settings/ for layout.
-   You own src/frontend/preferences/ exclusively.
-   Do not touch any other directory.
-   Done when: all components render correctly with mock data, form validation
-   works, loading and error states are handled.
-
-3. Test teammate: Write tests in tests/preferences/. Cover:
-   - API unit tests: valid CRUD, invalid input rejection, quiet hours validation
-   - Frontend unit tests: toggle behavior, form submission, error states
-   - Integration test: full flow from UI toggle → API call → DB update → UI confirmation
-   You own tests/preferences/ exclusively.
-   Do not touch any other directory.
-   Done when: all critical paths have coverage, edge cases documented.
-
-Each teammate owns their directory exclusively. No cross-directory edits.
-Use Sonnet for all teammates.
-Activate delegate mode. Do not write any code yourself.
-Wait for all teammates to complete their tasks before proceeding.
+Agent(
+  description: "Test suite",
+  team_name: "notif-prefs",
+  name: "test-dev",
+  model: "sonnet",
+  prompt: "Write tests for the notification preferences feature.
+    API contract:
+    - GET /api/preferences, PUT /api/preferences, GET /api/preferences/events
+    Cover:
+    - API unit tests: valid CRUD, invalid input rejection, quiet hours validation
+    - Frontend unit tests: toggle behavior, form submission, error states
+    - Integration test: full flow UI toggle → API call → DB update → UI confirmation
+    You own tests/preferences/ exclusively.
+    Do not touch any other directory.
+    Done when: all critical paths have coverage, edge cases documented.
+    Mark your task as completed via TaskUpdate when done."
+)
 ```
 
 ## Step 3: Parallel Execution
@@ -92,21 +118,23 @@ Wait for all teammates to complete their tasks before proceeding.
 Each teammate works in isolation against the shared contract:
 
 **API teammate** (working ~8 min):
+- Presents plan → Lead approves via `plan_approval_response`
 - Creates Postgres migration: `preferences` table with user_id, channel_settings (JSONB),
   quiet_hours (JSONB), event_overrides (JSONB)
 - Implements GET /api/preferences with user auth middleware
 - Implements PUT /api/preferences with Joi validation
 - Implements GET /api/preferences/events returning hardcoded event catalog
 - Tests manually with curl
-- Marks task complete
+- Marks task complete via TaskUpdate
 
 **Frontend teammate** (working ~10 min):
+- Presents plan → Lead approves via `plan_approval_response`
 - Scaffolds PreferencesPage using existing SettingsPage layout as reference
-- Builds ChannelToggles component: grid of event types × channels with toggle switches
+- Builds ChannelToggles component: grid of event types x channels with toggle switches
 - Builds QuietHoursForm: enable checkbox + two time pickers (start/end)
 - Mocks API calls using the contract (returns hardcoded data matching contract shape)
 - Adds loading spinner, error toast, success confirmation
-- Marks task complete
+- Marks task complete via TaskUpdate
 
 **Test teammate** (working ~7 min):
 - Writes API tests: happy path CRUD, invalid time format rejection, missing fields,
@@ -114,9 +142,9 @@ Each teammate works in isolation against the shared contract:
 - Writes frontend tests: toggle state changes, form submission calls correct endpoint,
   error state renders message, quiet hours validation (end > start)
 - Writes integration test skeleton (requires both API and frontend, will need wiring)
-- Marks task complete
+- Marks task complete via TaskUpdate
 
-## Step 4: Lead Synthesis
+## Step 4: Lead Synthesis and Shutdown
 
 After all three teammates report, the Lead verifies and integrates:
 
@@ -140,16 +168,24 @@ After all three teammates report, the Lead verifies and integrates:
 None. All teammates delivered within scope and contract.
 ```
 
+**Shutdown and cleanup:**
+```
+SendMessage(to: "api-dev", message: { type: "shutdown_request", reason: "Feature complete" })
+SendMessage(to: "frontend-dev", message: { type: "shutdown_request", reason: "Feature complete" })
+SendMessage(to: "test-dev", message: { type: "shutdown_request", reason: "Feature complete" })
+TeamDelete()
+```
+
 ## Why This Worked
 
 - **Shared contract up front**: The API shape was defined before spawning. All three
   teammates built against the same interface, so integration is mechanical, not creative.
 - **Strict directory ownership**: API owns src/api/preferences/, Frontend owns
   src/frontend/preferences/, Tests own tests/preferences/. Zero conflict risk.
+- **Plan approval for implementers**: `mode: "plan"` ensured the Lead reviewed each
+  approach before code was written, catching misunderstandings early.
 - **No cross-communication needed**: This is pure Throughput — each teammate works in
-  isolation. The mailbox was never used. The task list tracked completion, nothing more.
+  isolation. SendMessage was never used between teammates. TaskList tracked completion.
 - **Parallel time savings**: Sequentially this would take ~25 minutes. In parallel, the
   wall-clock time was ~10 minutes (the longest single track). That's the Throughput payoff.
-- **Clear integration path**: The Lead's synthesis isn't just "concatenate reports" — it
-  identifies the remaining integration steps that require sequential work after the parallel
-  phase completes.
+- **Clean lifecycle**: TeamCreate → plan approval → parallel work → shutdown → TeamDelete.

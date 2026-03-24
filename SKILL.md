@@ -7,8 +7,12 @@ description: >
   "parallel agents" approach, (4) debugging stuck teammates, file conflicts, idle states,
   or team coordination issues, (5) evaluating whether a task needs a team vs. subagents
   vs. single agent, (6) the user wants to "divide the work", do a "multi-perspective
-  review", or "parallelize" a task across agents. Even if the user doesn't say "team"
+  review", or "parallelize" a task across agents. Also triggers for Spanish equivalents:
+  "equipo de agentes", "trabajo en paralelo", "dividir el trabajo", "revisión
+  multi-perspectiva", "enjambre de agentes". Even if the user doesn't say "team"
   explicitly, use this skill whenever the intent is clearly multi-agent coordination.
+compatibility:
+  tools: [TeamCreate, TeamDelete, Agent, SendMessage, TaskCreate, TaskUpdate, TaskList]
 ---
 
 # Agent Teams Orchestration
